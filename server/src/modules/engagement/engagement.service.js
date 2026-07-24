@@ -1,6 +1,16 @@
-const prisma = require("../../config/database");
 const { AppError } = require("../../utils/apiResponse");
 const logger = require("../../utils/logger");
+
+const EngagementEvent = require("../../models/EngagementEvent");
+const StudentTopicProgress = require("../../models/StudentTopicProgress");
+const StudentProfile = require("../../models/StudentProfile");
+const Module = require("../../models/Module");
+const Subject = require("../../models/Subject");
+const Topic = require("../../models/Topic");
+const MCQSet = require("../../models/MCQSet");
+const MCQAttempt = require("../../models/MCQAttempt");
+const Doubt = require("../../models/Doubt");
+const ContentAsset = require("../../models/ContentAsset");
 
 // ═══════════════════════════════════════════════════
 // VIDEO HEARTBEAT
@@ -13,39 +23,27 @@ const HEARTBEAT_INTERVAL = 30;
 
 /**
  * Process a video watch heartbeat from the student's player.
- * Called every 30 seconds during active playback.
- * 
- * Updates:
- * 1. Creates an EngagementEvent record
- * 2. Updates StudentTopicProgress (watched seconds)
- * 3. Checks for topic completion
  */
 async function processHeartbeat(studentProfileId, data) {
   const { assetId, topicId, playbackPosition, sessionToken } = data;
 
   // Record the raw engagement event
-  await prisma.engagementEvent.create({
-    data: {
-      studentId: studentProfileId,
-      contentAssetId: assetId || null,
-      eventType: "WATCH_HEARTBEAT",
-      metadata: {
-        topicId,
-        playbackPosition,
-        sessionToken,
-        timestamp: new Date().toISOString(),
-      },
+  await EngagementEvent.create({
+    studentId: studentProfileId,
+    contentAssetId: assetId || null,
+    eventType: "WATCH_HEARTBEAT",
+    metadata: {
+      topicId,
+      playbackPosition,
+      sessionToken,
+      timestamp: new Date().toISOString(),
     },
   });
 
   // Get or create the topic progress record
-  let progress = await prisma.studentTopicProgress.findUnique({
-    where: {
-      studentId_topicId: {
-        studentId: studentProfileId,
-        topicId,
-      },
-    },
+  let progress = await StudentTopicProgress.findOne({
+    studentId: studentProfileId,
+    topicId,
   });
 
   // If no progress record exists, create one
@@ -53,14 +51,12 @@ async function processHeartbeat(studentProfileId, data) {
     // Get total video duration for this topic
     const totalSeconds = await _getTopicTotalDuration(topicId);
 
-    progress = await prisma.studentTopicProgress.create({
-      data: {
-        studentId: studentProfileId,
-        topicId,
-        status: "IN_PROGRESS",
-        watchedSeconds: HEARTBEAT_INTERVAL,
-        totalSeconds,
-      },
+    progress = await StudentTopicProgress.create({
+      studentId: studentProfileId,
+      topicId,
+      status: "IN_PROGRESS",
+      watchedSeconds: HEARTBEAT_INTERVAL,
+      totalSeconds,
     });
   } else {
     // Increment watched time by the heartbeat interval
@@ -81,13 +77,11 @@ async function processHeartbeat(studentProfileId, data) {
           updateData.completedAt = new Date();
 
           // Record completion event
-          await prisma.engagementEvent.create({
-            data: {
-              studentId: studentProfileId,
-              contentAssetId: assetId || null,
-              eventType: "VIDEO_COMPLETE",
-              metadata: { topicId, watchedSeconds: newWatched },
-            },
+          await EngagementEvent.create({
+            studentId: studentProfileId,
+            contentAssetId: assetId || null,
+            eventType: "VIDEO_COMPLETE",
+            metadata: { topicId, watchedSeconds: newWatched },
           });
 
           logger.info("Topic marked complete", { studentProfileId, topicId, watchRatio });
@@ -95,10 +89,11 @@ async function processHeartbeat(studentProfileId, data) {
       }
     }
 
-    progress = await prisma.studentTopicProgress.update({
-      where: { id: progress.id },
-      data: updateData,
-    });
+    progress = await StudentTopicProgress.findByIdAndUpdate(
+      progress._id,
+      updateData,
+      { new: true }
+    );
   }
 
   return {
@@ -112,12 +107,10 @@ async function processHeartbeat(studentProfileId, data) {
  * Record a login/session event for login consistency tracking.
  */
 async function recordSessionLogin(studentProfileId) {
-  await prisma.engagementEvent.create({
-    data: {
-      studentId: studentProfileId,
-      eventType: "SESSION_LOGIN",
-      metadata: { timestamp: new Date().toISOString() },
-    },
+  await EngagementEvent.create({
+    studentId: studentProfileId,
+    eventType: "SESSION_LOGIN",
+    metadata: { timestamp: new Date().toISOString() },
   });
 }
 
@@ -129,52 +122,48 @@ async function recordSessionLogin(studentProfileId) {
  * Get a student's progress across all their enrolled topics.
  */
 async function getStudentProgress(studentProfileId) {
-  const profile = await prisma.studentProfile.findUnique({
-    where: { id: studentProfileId },
-    select: { classId: true, programId: true },
-  });
+  const profile = await StudentProfile.findById(studentProfileId).select('classId programId');
 
   if (!profile) throw new AppError("Student profile not found.", 404);
 
   // Get all subjects the student has access to
-  const subjectFilter = {};
+  const subjectFilter = { isActive: true };
   if (profile.classId) subjectFilter.classId = profile.classId;
   if (profile.programId) {
-    const modules = await prisma.module.findMany({
-      where: { programId: profile.programId },
-      select: { id: true },
-    });
-    subjectFilter.moduleId = { in: modules.map((m) => m.id) };
+    const modules = await Module.find({ programId: profile.programId }).select('_id');
+    subjectFilter.moduleId = { $in: modules.map((m) => m._id) };
   }
 
-  const subjects = await prisma.subject.findMany({
-    where: { ...subjectFilter, isActive: true },
-    include: {
-      topics: {
-        where: { isActive: true },
-        orderBy: { sortOrder: "asc" },
-        select: { id: true, title: true },
-      },
-    },
-    orderBy: { sortOrder: "asc" },
+  const subjects = await Subject.find(subjectFilter).sort({ sortOrder: 1 });
+
+  // Get all topics for these subjects
+  const allTopics = await Topic.find({
+    subjectId: { $in: subjects.map(s => s._id) },
+    isActive: true
+  }).sort({ sortOrder: 1 });
+
+  // Group topics by subject
+  const topicsBySubject = {};
+  allTopics.forEach(t => {
+    if (!topicsBySubject[t.subjectId]) topicsBySubject[t.subjectId] = [];
+    topicsBySubject[t.subjectId].push(t);
   });
 
   // Get all topic progress for this student
-  const progressRecords = await prisma.studentTopicProgress.findMany({
-    where: { studentId: studentProfileId },
-  });
+  const progressRecords = await StudentTopicProgress.find({ studentId: studentProfileId });
 
   const progressMap = {};
   progressRecords.forEach((p) => {
-    progressMap[p.topicId] = p;
+    progressMap[p.topicId.toString()] = p;
   });
 
   // Build the response with per-subject breakdown
   const result = subjects.map((subject) => {
-    const topicsWithProgress = subject.topics.map((topic) => {
-      const prog = progressMap[topic.id];
+    const sTopics = topicsBySubject[subject._id] || [];
+    const topicsWithProgress = sTopics.map((topic) => {
+      const prog = progressMap[topic._id.toString()];
       return {
-        id: topic.id,
+        id: topic._id,
         title: topic.title,
         status: prog?.status || "NOT_STARTED",
         watchedSeconds: prog?.watchedSeconds || 0,
@@ -188,14 +177,14 @@ async function getStudentProgress(studentProfileId) {
     const totalWatch = topicsWithProgress.reduce((sum, t) => sum + t.watchedSeconds, 0);
 
     return {
-      id: subject.id,
+      id: subject._id,
       name: subject.name,
-      totalTopics: subject.topics.length,
+      totalTopics: sTopics.length,
       completedTopics: completedCount,
       inProgressTopics: inProgressCount,
       totalWatchSeconds: totalWatch,
-      progressPercent: subject.topics.length > 0
-        ? Math.round((completedCount / subject.topics.length) * 100)
+      progressPercent: sTopics.length > 0
+        ? Math.round((completedCount / sTopics.length) * 100)
         : 0,
       topics: topicsWithProgress,
     };
@@ -223,28 +212,23 @@ async function getStudentProgress(studentProfileId) {
  * Get a student's progress for a single topic.
  */
 async function getTopicProgress(studentProfileId, topicId) {
-  const progress = await prisma.studentTopicProgress.findUnique({
-    where: {
-      studentId_topicId: { studentId: studentProfileId, topicId },
-    },
+  const progress = await StudentTopicProgress.findOne({
+    studentId: studentProfileId,
+    topicId,
   });
 
   // Get MCQ attempt history for this topic
-  const mcqSets = await prisma.mCQSet.findMany({
-    where: { topicId },
-    select: { id: true },
-  });
+  const mcqSets = await MCQSet.find({ topicId }).select('_id');
+  const setIds = mcqSets.map(s => s._id);
 
-  const mcqAttempts = mcqSets.length > 0
-    ? await prisma.mCQAttempt.findMany({
-        where: {
-          studentId: studentProfileId,
-          mcqSetId: { in: mcqSets.map((s) => s.id) },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        select: { id: true, score: true, createdAt: true },
+  const mcqAttempts = setIds.length > 0
+    ? await MCQAttempt.find({
+        studentId: studentProfileId,
+        mcqSetId: { $in: setIds },
       })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('_id score createdAt')
     : [];
 
   return {
@@ -252,7 +236,7 @@ async function getTopicProgress(studentProfileId, topicId) {
     watchedSeconds: progress?.watchedSeconds || 0,
     totalSeconds: progress?.totalSeconds || 0,
     completedAt: progress?.completedAt || null,
-    mcqAttempts,
+    mcqAttempts: mcqAttempts.map(a => ({ id: a._id, score: a.score, createdAt: a.createdAt })),
     latestMCQScore: mcqAttempts.length > 0 ? mcqAttempts[0].score : null,
   };
 }
@@ -263,11 +247,6 @@ async function getTopicProgress(studentProfileId, topicId) {
 
 /**
  * Compute the attention score for a student.
- * 
- * Formula (from architecture document):
- *   Score = (watchTime × 0.35) + (completion × 0.25) +
- *           (mcqAttempt × 0.12) + (mcqScore × 0.08) +
- *           (doubtPct × 0.12) + (loginPct × 0.08)
  */
 async function computeAttentionScore(studentProfileId) {
   const [
@@ -278,7 +257,7 @@ async function computeAttentionScore(studentProfileId) {
   ] = await Promise.all([
     _getWatchAndCompletionMetrics(studentProfileId),
     _getMCQMetrics(studentProfileId),
-    prisma.doubt.count({ where: { studentId: studentProfileId } }),
+    Doubt.countDocuments({ studentId: studentProfileId }),
     _getLoginConsistency(studentProfileId),
   ]);
 
@@ -337,46 +316,57 @@ async function computeAttentionScore(studentProfileId) {
 // ═══════════════════════════════════════════════════
 
 async function _getTopicTotalDuration(topicId) {
-  const assets = await prisma.contentAsset.findMany({
-    where: { topicId, type: "VIDEO", publishState: "PUBLISHED" },
-    select: { duration: true },
-  });
+  const assets = await ContentAsset.find({
+    topicId, type: "VIDEO", publishState: "PUBLISHED"
+  }).select('duration');
   return assets.reduce((sum, a) => sum + (a.duration || 0), 0);
 }
 
 async function _getWatchAndCompletionMetrics(studentProfileId) {
-  const allProgress = await prisma.studentTopicProgress.findMany({
-    where: { studentId: studentProfileId },
-  });
+  const allProgress = await StudentTopicProgress.find({ studentId: studentProfileId });
 
-  const profile = await prisma.studentProfile.findUnique({
-    where: { id: studentProfileId },
-    select: { classId: true, programId: true },
-  });
+  const profile = await StudentProfile.findById(studentProfileId).select('classId programId');
 
-  // Count total accessible topics
   let totalTopicCount = 0;
-  if (profile.classId) {
-    totalTopicCount = await prisma.topic.count({
-      where: {
-        isActive: true,
-        subject: { classId: profile.classId, isActive: true },
-      },
-    });
-  }
-
-  // Total available video duration
   let totalAvailable = 0;
-  if (profile.classId) {
-    const assets = await prisma.contentAsset.aggregate({
-      where: {
-        type: "VIDEO",
-        publishState: "PUBLISHED",
-        topic: { isActive: true, subject: { classId: profile.classId } },
-      },
-      _sum: { duration: true },
+
+  if (profile && profile.classId) {
+    const subjects = await Subject.find({ classId: profile.classId, isActive: true }).select('_id');
+    const subjectIds = subjects.map(s => s._id);
+
+    totalTopicCount = await Topic.countDocuments({
+      isActive: true,
+      subjectId: { $in: subjectIds }
     });
-    totalAvailable = assets._sum.duration || 0;
+    
+    // Using aggregation for total duration
+    const assetsAggr = await ContentAsset.aggregate([
+      {
+        $lookup: {
+          from: "topics",
+          localField: "topicId",
+          foreignField: "_id",
+          as: "topic"
+        }
+      },
+      { $unwind: "$topic" },
+      {
+        $match: {
+          type: "VIDEO",
+          publishState: "PUBLISHED",
+          "topic.isActive": true,
+          "topic.subjectId": { $in: subjectIds }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalDuration: { $sum: "$duration" }
+        }
+      }
+    ]);
+    
+    totalAvailable = assetsAggr.length > 0 ? assetsAggr[0].totalDuration : 0;
   }
 
   return {
@@ -388,42 +378,31 @@ async function _getWatchAndCompletionMetrics(studentProfileId) {
 }
 
 async function _getMCQMetrics(studentProfileId) {
-  const profile = await prisma.studentProfile.findUnique({
-    where: { id: studentProfileId },
-    select: { classId: true },
-  });
+  const profile = await StudentProfile.findById(studentProfileId).select('classId');
 
-  // Topics that have MCQ sets
   let topicsWithMCQs = 0;
-  if (profile.classId) {
-    const mcqTopics = await prisma.mCQSet.findMany({
-      where: {
-        topic: { isActive: true, subject: { classId: profile.classId } },
-      },
-      select: { topicId: true },
-      distinct: ["topicId"],
+  if (profile && profile.classId) {
+    const subjects = await Subject.find({ classId: profile.classId, isActive: true }).select('_id');
+    const subjectIds = subjects.map(s => s._id);
+    
+    const topics = await Topic.find({ subjectId: { $in: subjectIds }, isActive: true }).select('_id');
+    const topicIds = topics.map(t => t._id);
+
+    const mcqTopics = await MCQSet.distinct("topicId", {
+      topicId: { $in: topicIds }
     });
     topicsWithMCQs = mcqTopics.length;
   }
 
-  // Topics where this student has attempted MCQs
-  const attempts = await prisma.mCQAttempt.findMany({
-    where: { studentId: studentProfileId },
-    select: { mcqSetId: true, score: true },
-  });
+  const attempts = await MCQAttempt.find({ studentId: studentProfileId }).select('mcqSetId score');
 
-  const attemptedSetIds = [...new Set(attempts.map((a) => a.mcqSetId))];
+  const attemptedSetIds = [...new Set(attempts.map((a) => a.mcqSetId.toString()))];
   let topicsAttempted = 0;
   if (attemptedSetIds.length > 0) {
-    const sets = await prisma.mCQSet.findMany({
-      where: { id: { in: attemptedSetIds } },
-      select: { topicId: true },
-      distinct: ["topicId"],
-    });
-    topicsAttempted = sets.length;
+    const topicIds = await MCQSet.distinct("topicId", { _id: { $in: attemptedSetIds } });
+    topicsAttempted = topicIds.length;
   }
 
-  // Average score (latest attempt per set)
   const averageScore = attempts.length > 0
     ? attempts.reduce((s, a) => s + a.score, 0) / attempts.length
     : 0;
@@ -434,24 +413,18 @@ async function _getMCQMetrics(studentProfileId) {
 async function _getLoginConsistency(studentProfileId) {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  // Count distinct days with watch heartbeats (minimum 5 minutes = 10 heartbeats)
-  const events = await prisma.engagementEvent.findMany({
-    where: {
-      studentId: studentProfileId,
-      eventType: { in: ["WATCH_HEARTBEAT", "SESSION_LOGIN"] },
-      createdAt: { gte: thirtyDaysAgo },
-    },
-    select: { createdAt: true },
-  });
+  const events = await EngagementEvent.find({
+    studentId: studentProfileId,
+    eventType: { $in: ["WATCH_HEARTBEAT", "SESSION_LOGIN"] },
+    createdAt: { $gte: thirtyDaysAgo },
+  }).select('createdAt');
 
-  // Group by date and count heartbeats per day
   const dayMap = {};
   events.forEach((e) => {
     const day = e.createdAt.toISOString().split("T")[0];
     dayMap[day] = (dayMap[day] || 0) + 1;
   });
 
-  // An "active day" requires at least 10 heartbeats (5 min of watch time)
   const activeDays = Object.values(dayMap).filter((count) => count >= 10).length;
 
   return { activeDays };

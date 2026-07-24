@@ -1,17 +1,18 @@
 const contentService = require("./content.service");
 const { sendSuccess } = require("../../utils/apiResponse");
-const prisma = require("../../config/database");
+const TeacherProfile = require("../../models/TeacherProfile");
+const StudentProfile = require("../../models/StudentProfile");
 
 async function _getTeacherProfileId(userId) {
-  const profile = await prisma.teacherProfile.findUnique({ where: { userId } });
+  const profile = await TeacherProfile.findOne({ userId });
   if (!profile) throw new Error("Teacher profile not found for this user.");
-  return profile.id;
+  return profile._id;
 }
 
 async function _getStudentProfileId(userId) {
-  const profile = await prisma.studentProfile.findUnique({ where: { userId } });
+  const profile = await StudentProfile.findOne({ userId });
   if (!profile) throw new Error("Student profile not found for this user.");
-  return profile.id;
+  return profile._id;
 }
 
 // ─── Teacher: Video Upload ─────────────────────

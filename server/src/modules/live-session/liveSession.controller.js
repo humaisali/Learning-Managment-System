@@ -1,17 +1,18 @@
 const liveSessionService = require("./liveSession.service");
 const { sendSuccess } = require("../../utils/apiResponse");
-const prisma = require("../../config/database");
+const TeacherProfile = require("../../models/TeacherProfile");
+const StudentProfile = require("../../models/StudentProfile");
 
 async function _getTeacherProfileId(userId) {
-  const p = await prisma.teacherProfile.findUnique({ where: { userId } });
+  const p = await TeacherProfile.findOne({ userId });
   if (!p) throw new Error("Teacher profile not found.");
-  return p.id;
+  return p._id;
 }
 
 async function _getStudentProfileId(userId) {
-  const p = await prisma.studentProfile.findUnique({ where: { userId } });
+  const p = await StudentProfile.findOne({ userId });
   if (!p) throw new Error("Student profile not found.");
-  return p.id;
+  return p._id;
 }
 
 async function createSession(req, res, next) {

@@ -1,18 +1,19 @@
 const doubtService = require("./doubt.service");
 const { sendSuccess, sendPaginated } = require("../../utils/apiResponse");
 const { parsePagination } = require("../../utils/pagination");
-const prisma = require("../../config/database");
+const StudentProfile = require("../../models/StudentProfile");
+const TeacherProfile = require("../../models/TeacherProfile");
 
 async function _getStudentProfileId(userId) {
-  const p = await prisma.studentProfile.findUnique({ where: { userId } });
+  const p = await StudentProfile.findOne({ userId });
   if (!p) throw new Error("Student profile not found.");
-  return p.id;
+  return p._id;
 }
 
 async function _getTeacherProfileId(userId) {
-  const p = await prisma.teacherProfile.findUnique({ where: { userId } });
+  const p = await TeacherProfile.findOne({ userId });
   if (!p) throw new Error("Teacher profile not found.");
-  return p.id;
+  return p._id;
 }
 
 // ─── Student ────────────────────────────────────

@@ -1,4 +1,5 @@
-const prisma = require("../../config/database");
+const Notification = require("../../models/Notification");
+const User = require("../../models/User");
 const config = require("../../config");
 const logger = require("../../utils/logger");
 
@@ -71,21 +72,16 @@ async function sendSMS(phone, message) {
  */
 async function dispatch({ userId, type, subject, body, channel = "EMAIL" }) {
   // Persist to database for in-app display
-  const notification = await prisma.notification.create({
-    data: {
-      userId,
-      channel,
-      type,
-      subject,
-      body,
-    },
+  const notification = await Notification.create({
+    userId,
+    channel,
+    type,
+    subject,
+    body,
   });
 
   // Fetch user contact info
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { email: true, phone: true },
-  });
+  const user = await User.findById(userId).select('email phone');
 
   if (!user) {
     logger.warn("Notification target user not found", { userId, type });
@@ -101,11 +97,8 @@ async function dispatch({ userId, type, subject, body, channel = "EMAIL" }) {
   }
 
   // Update notification record with send status
-  await prisma.notification.update({
-    where: { id: notification.id },
-    data: sendResult.sent
-      ? { sentAt: new Date() }
-      : { failedAt: new Date() },
+  await Notification.findByIdAndUpdate(notification._id, {
+    [sendResult.sent ? 'sentAt' : 'failedAt']: new Date(),
   });
 
   return notification;
@@ -228,46 +221,35 @@ async function getUserNotifications(userId, { page = 1, limit = 20 } = {}) {
   const skip = (page - 1) * limit;
 
   const [notifications, total, unreadCount] = await Promise.all([
-    prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        type: true,
-        subject: true,
-        body: true,
-        isRead: true,
-        channel: true,
-        createdAt: true,
-      },
-    }),
-    prisma.notification.count({ where: { userId } }),
-    prisma.notification.count({ where: { userId, isRead: false } }),
+    Notification.find({ userId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .select('id type subject body isRead channel createdAt'),
+    Notification.countDocuments({ userId }),
+    Notification.countDocuments({ userId, isRead: false }),
   ]);
 
   return { notifications, total, unreadCount };
 }
 
 async function markAsRead(notificationId, userId) {
-  const notif = await prisma.notification.findUnique({
-    where: { id: notificationId },
-  });
+  const notif = await Notification.findById(notificationId);
 
-  if (!notif || notif.userId !== userId) return null;
+  if (!notif || notif.userId.toString() !== userId.toString()) return null;
 
-  return prisma.notification.update({
-    where: { id: notificationId },
-    data: { isRead: true },
-  });
+  return Notification.findByIdAndUpdate(
+    notificationId,
+    { isRead: true },
+    { new: true }
+  );
 }
 
 async function markAllAsRead(userId) {
-  return prisma.notification.updateMany({
-    where: { userId, isRead: false },
-    data: { isRead: true },
-  });
+  return Notification.updateMany(
+    { userId, isRead: false },
+    { isRead: true }
+  );
 }
 
 // ═══════════════════════════════════════════════════

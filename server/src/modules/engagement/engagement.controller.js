@@ -1,11 +1,12 @@
 const engagementService = require("./engagement.service");
 const { sendSuccess } = require("../../utils/apiResponse");
-const prisma = require("../../config/database");
+const StudentProfile = require("../../models/StudentProfile");
+const ParentLink = require("../../models/ParentLink");
 
 async function _getStudentProfileId(userId) {
-  const profile = await prisma.studentProfile.findUnique({ where: { userId } });
+  const profile = await StudentProfile.findOne({ userId });
   if (!profile) throw new Error("Student profile not found.");
-  return profile.id;
+  return profile._id;
 }
 
 async function processHeartbeat(req, res, next) {
@@ -38,14 +39,22 @@ async function getAttentionScore(req, res, next) {
     let studentProfileId;
 
     if (req.user.role === "PARENT") {
-      const link = await prisma.parentLink.findFirst({
-        where: { parentId: req.user.id },
-        include: { student: { include: { studentProfile: true } } },
-      });
-      if (!link || !link.student.studentProfile) {
+      const link = await ParentLink.findOne({ parentId: req.user.id })
+        .populate({
+          path: 'studentId',
+          select: 'id'
+        });
+      
+      if (!link) {
         throw new Error("No linked student found.");
       }
-      studentProfileId = link.student.studentProfile.id;
+      
+      // Need to find the student profile based on the linked student's user ID
+      const profile = await StudentProfile.findOne({ userId: link.studentId });
+      if (!profile) {
+        throw new Error("Student profile not found.");
+      }
+      studentProfileId = profile._id;
     } else {
       studentProfileId = await _getStudentProfileId(req.user.id);
     }
