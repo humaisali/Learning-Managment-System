@@ -1,0 +1,101 @@
+version: "3.8"
+
+services:
+  # ─── MongoDB Database ───────────────────────────
+  mongo:
+    image: mongo:6
+    container_name: lms-mongo
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Init container to setup replica set
+  mongo-init:
+    image: mongo:6
+    container_name: lms-mongo-init
+    depends_on:
+      mongo:
+        condition: service_started
+    command: >
+      bash -c "
+        sleep 5;
+        mongo --host mongo:27017 --eval '
+          try {
+            rs.status();
+          } catch (e) {
+            rs.initiate({
+              _id: \"rs0\",
+              members: [{ _id: 0, host: \"mongo:27017\" }]
+            });
+          }
+        '
+      "
+
+  # ─── Redis (Session Store + Socket.io Adapter) ──
+  redis:
+    image: redis:7-alpine
+    container_name: lms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend API Server ─────────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: lms-server
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: ${DATABASE_URL:-mongodb://mongo:27017/lms_platform?replicaSet=rs0}
+      REDIS_URL: redis://redis:6379
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:5173}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+    depends_on:
+      mongo:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─── Frontend (Nginx serving built React app) ───
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: lms-client
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - server
+
+volumes:
+  mongo_data:
+  redis_data:
