@@ -1,7 +1,7 @@
 const { z } = require("zod");
 
 const submitDoubtSchema = z.object({
-  topicId: z.string().uuid("Invalid topic ID"),
+  topicId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid topic ID"),
   text: z.string()
     .min(20, "Doubt must be at least 20 characters to prevent spam")
     .max(2000, "Doubt text is too long (max 2000 characters)")
@@ -22,8 +22,8 @@ const updateDoubtStatusSchema = z.object({
 
 const doubtListQuerySchema = z.object({
   status: z.enum(["NEW", "ANSWERED", "ESCALATED", "CLOSED", "LIVE_SESSION_RECOMMENDED"]).optional(),
-  subjectId: z.string().uuid().optional(),
-  topicId: z.string().uuid().optional(),
+  subjectId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid subject ID").optional(),
+  topicId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid topic ID").optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 }).passthrough();

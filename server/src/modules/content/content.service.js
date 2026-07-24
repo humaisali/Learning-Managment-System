@@ -1,7 +1,14 @@
 const mongoose = require("mongoose");
 const { AppError } = require("../../utils/apiResponse");
 const { createAuditLog } = require("../../middleware/audit");
-const { getVideoProvider } = require("../../providers/video/bunny.provider");
+const cloudinary = require('cloudinary').v2;
+const config = require("../../config");
+
+cloudinary.config({
+  cloud_name: config.cloudinary.cloudName,
+  api_key: config.cloudinary.apiKey,
+  api_secret: config.cloudinary.apiSecret,
+});
 const logger = require("../../utils/logger");
 
 const Topic = require("../../models/Topic");
@@ -22,31 +29,33 @@ async function initiateVideoUpload(teacherProfileId, data) {
 
   await _verifyTeacherSubjectAccess(teacherProfileId, topic.subjectId);
 
-  const videoProvider = getVideoProvider();
-  const uploadData = await videoProvider.getUploadUrl(data.filename, {
-    title: data.title,
-  });
+  const timestamp = Math.round(new Date().getTime() / 1000);
+  const signature = cloudinary.utils.api_sign_request({
+    timestamp,
+    folder: 'lms_videos'
+  }, config.cloudinary.apiSecret);
 
   const asset = await ContentAsset.create({
     topicId: data.topicId,
     teacherId: teacherProfileId,
     type: "VIDEO",
     title: data.title,
-    fileUrl: uploadData.videoId, // Store provider video ID
+    fileUrl: "pending", // Will be updated on confirm
     publishState: "DRAFT",
   });
 
   logger.info("Video upload initiated", {
     assetId: asset._id,
-    videoId: uploadData.videoId,
     teacherId: teacherProfileId,
   });
 
   return {
     assetId: asset._id,
-    uploadUrl: uploadData.uploadUrl,
-    videoId: uploadData.videoId,
-    headers: uploadData.headers,
+    signature,
+    timestamp,
+    cloudName: config.cloudinary.cloudName,
+    apiKey: config.cloudinary.apiKey,
+    folder: 'lms_videos'
   };
 }
 
@@ -57,18 +66,12 @@ async function confirmVideoUpload(assetId, teacherProfileId, metadata) {
     throw new AppError("You can only update your own uploads.", 403);
   }
 
-  const videoProvider = getVideoProvider();
-  let videoInfo;
-  try {
-    videoInfo = await videoProvider.getVideoInfo(asset.fileUrl);
-  } catch (err) {
-    logger.warn("Could not fetch video info from provider", { assetId, error: err.message });
-    videoInfo = { duration: metadata.duration || 0, status: "finished" };
-  }
-
   const updated = await ContentAsset.findByIdAndUpdate(
     assetId,
-    { duration: videoInfo.duration || metadata.duration || 0 },
+    { 
+      fileUrl: metadata.fileUrl, 
+      duration: metadata.duration || 0 
+    },
     { new: true }
   );
 
@@ -87,11 +90,17 @@ async function getPlaybackUrl(assetId, userId) {
     throw new AppError("Playback URL only available for video content.", 400);
   }
 
-  const videoProvider = getVideoProvider();
-  const playback = await videoProvider.getPlaybackUrl(asset.fileUrl, userId);
+  // Optimize Cloudinary URLs for smoother streaming
+  let optimizedUrl = asset.fileUrl;
+  if (optimizedUrl && optimizedUrl.includes('res.cloudinary.com') && optimizedUrl.includes('/upload/')) {
+    // Prevent double injection if it already has transformations
+    if (!optimizedUrl.includes('/upload/q_auto')) {
+      optimizedUrl = optimizedUrl.replace('/upload/', '/upload/q_auto,f_auto,vc_auto/');
+    }
+  }
 
   return {
-    ...playback,
+    playbackUrl: optimizedUrl,
     assetId: asset._id,
     title: asset.title,
     duration: asset.duration,

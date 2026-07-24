@@ -5,7 +5,7 @@ import api from "@/lib/api";
 
 const HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
 
-export default function VideoPlayer({ assetId, title, duration, onProgress }) {
+export default function VideoPlayer({ assetId, title, duration, onProgress, topicId }) {
   const videoRef = useRef(null);
   const heartbeatRef = useRef(null);
   const sessionTokenRef = useRef(`sess_${Date.now()}_${Math.random().toString(36).slice(2)}`);
@@ -52,7 +52,7 @@ export default function VideoPlayer({ assetId, title, duration, onProgress }) {
     try {
       await api.post("/engagement/heartbeat", {
         assetId,
-        topicId: null, // Will be set by the parent component
+        topicId: topicId || null,
         playbackPosition: Math.floor(video.currentTime),
         sessionToken: sessionTokenRef.current,
       });

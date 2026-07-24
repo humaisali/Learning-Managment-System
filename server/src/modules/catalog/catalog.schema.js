@@ -12,7 +12,7 @@ const updateBoardSchema = createBoardSchema.partial().extend({
 
 const createClassSchema = z.object({
   name: z.string().min(1).max(100).trim(),
-  boardId: z.string().uuid("Invalid board ID"),
+  boardId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid board ID"),
   sortOrder: z.number().int().min(0).default(0),
 });
 
@@ -32,7 +32,7 @@ const updateProgramSchema = createProgramSchema.partial().extend({
 
 const createModuleSchema = z.object({
   name: z.string().min(1).max(200).trim(),
-  programId: z.string().uuid("Invalid program ID"),
+  programId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid program ID"),
   sortOrder: z.number().int().min(0).default(0),
 });
 
@@ -40,8 +40,8 @@ const updateModuleSchema = createModuleSchema.partial().extend({});
 
 const createSubjectSchema = z.object({
   name: z.string().min(1).max(200).trim(),
-  classId: z.string().uuid().optional().nullable(),
-  moduleId: z.string().uuid().optional().nullable(),
+  classId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid class ID").optional().nullable(),
+  moduleId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid module ID").optional().nullable(),
   sortOrder: z.number().int().min(0).default(0),
 }).refine(
   (data) => data.classId || data.moduleId,
@@ -56,7 +56,7 @@ const updateSubjectSchema = z.object({
 
 const createTopicSchema = z.object({
   title: z.string().min(1).max(300).trim(),
-  subjectId: z.string().uuid("Invalid subject ID"),
+  subjectId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid subject ID"),
   sortOrder: z.number().int().min(0).default(0),
 });
 
@@ -67,7 +67,7 @@ const updateTopicSchema = z.object({
 });
 
 const idParamSchema = z.object({
-  id: z.string().uuid("Invalid ID format"),
+  id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ID format"),
 });
 
 module.exports = {

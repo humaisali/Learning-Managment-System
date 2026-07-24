@@ -127,6 +127,7 @@ export default function TopicViewPage() {
                   assetId={primaryVideo.id}
                   title={primaryVideo.title}
                   duration={primaryVideo.duration}
+                  topicId={topic.id}
                   onProgress={(p) => {
                     // Progress callback — can trigger UI updates
                   }}

@@ -43,6 +43,12 @@ const config = {
     tokenSecret: process.env.MUX_TOKEN_SECRET,
   },
 
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET,
+  },
+
   email: {
     apiKey: process.env.RESEND_API_KEY,
     from: process.env.EMAIL_FROM || "noreply@yourlms.com",

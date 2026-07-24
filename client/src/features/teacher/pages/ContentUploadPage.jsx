@@ -267,26 +267,38 @@ function VideoUploadSection({ topicId, onSuccess }) {
 
     setUploading(true);
     try {
-      // Step 1: Get upload URL from our API
+      // Step 1: Get signature from our API
       const initRes = await api.post("/content/upload/video", {
         topicId,
         title: title.trim(),
         filename: file.name,
       });
 
-      const { assetId, uploadUrl, videoId, headers } = initRes.data.data;
+      const { assetId, signature, timestamp, cloudName, apiKey, folder } = initRes.data.data;
 
-      // Step 2: In production, upload directly to Bunny via TUS protocol
-      // For dev/mock, we skip the actual upload
-      if (!headers?.isMock) {
-        // Real TUS upload would go here
-        // const tusUpload = new tus.Upload(file, { endpoint: uploadUrl, headers, ... });
+      // Step 2: Upload directly to Cloudinary
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("api_key", apiKey);
+      formData.append("timestamp", timestamp);
+      formData.append("signature", signature);
+      formData.append("folder", folder);
+
+      const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/video/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const cloudData = await cloudRes.json();
+      
+      if (!cloudRes.ok) {
+        throw new Error(cloudData.error?.message || "Cloudinary upload failed");
       }
 
       // Step 3: Confirm upload
       await api.put(`/content/upload/video/${assetId}/confirm`, {
-        videoId,
-        duration: 0, // Would come from actual video metadata
+        fileUrl: cloudData.secure_url,
+        duration: cloudData.duration || 0,
       });
 
       toast.success("Video uploaded successfully! Set to draft — publish when ready.");
@@ -294,7 +306,7 @@ function VideoUploadSection({ topicId, onSuccess }) {
       setFile(null);
       if (onSuccess) onSuccess();
     } catch (err) {
-      toast.error(err.response?.data?.message || "Upload failed.");
+      toast.error(err.response?.data?.message || err.message || "Upload failed.");
     } finally {
       setUploading(false);
     }

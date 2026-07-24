@@ -31,8 +31,10 @@ function validate(schemas) {
           field: err.path.join("."),
           message: err.message,
         }));
+        
+        const errorMsg = formatted.map(f => `${f.field}: ${f.message}`).join(", ");
 
-        return next(new AppError("Validation failed.", 422, formatted));
+        return next(new AppError(`Validation failed: ${errorMsg}`, 422, formatted));
       }
 
       next(error);
